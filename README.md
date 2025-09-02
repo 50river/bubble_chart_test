@@ -96,3 +96,65 @@ Pages 配信であれば `fetch('./members_expenses.json')` がそのまま動�
 ---
 
 不明点や要望（例: 軸の追加、検索フィルタ、PNG エクスポート等）があれば Issue でお知らせください。
+
+## 判例（Legend）の実装について
+
+本実装では、凡例を SVG の外に HTML 要素として配置し、`#bubble-root` 内で `position: sticky; top: 0;` によりスクロール先頭固定にしています。SVG のズームや再レイアウトとは独立しており、読みやすさを優先した構成です。
+
+- 構成: ルート要素内に先に凡例（HTML）、続いて SVG を append します。
+- 固定位置: `#bubble-root` がスクロールコンテナ、凡例はその先頭で sticky 固定。
+- カテゴリ色: D3 の ordinal スケール（`d3.schemeTableau10`）でカテゴリ→色を割当。
+- サイズ凡例: 値（例: 1000 / 10000）を半径スケール `r()` に通して丸の直径を算出し、CSS の `width/height` へ反映。
+- リサイズ対応: `ResizeObserver` でサイズ変動時に `drawLegend()` を呼び出して更新。
+
+関連コード（抜粋, `index.html`）:
+
+```js
+// 1) 先に凡例用の HTML を用意して root に追加
+const legendDiv = document.createElement('div');
+legendDiv.className = 'legend-html';
+rootEl.appendChild(legendDiv);
+
+// 2) カテゴリと色の定義（カテゴリはデータからユニーク抽出）
+const categories = Array.from(new Set(nodesData.map(d => d.category)));
+const color = d3.scaleOrdinal().domain(categories).range(d3.schemeTableau10.concat(d3.schemeTableau10));
+
+// 3) 半径スケール（値→半径）と凡例の描画
+const r = d3.scaleSqrt().domain(d3.extent(nodesData, d => d.value)).range([6, 28]);
+
+function drawLegend() {
+  const items = categories.map(c => ({ key: c, label: c, color: color(c) }));
+  const r1 = Math.max(2, r(1000));
+  const r2 = Math.max(2, r(10000));
+  const sizeLegend = `
+    <span class="legend-item">
+      <strong>サイズ:</strong>
+      <span class="size-bubble" style="width:${2*r1}px;height:${2*r1}px;"></span>
+      <span class="size-label">¥1,000</span>
+      <span class="size-bubble" style="width:${2*r2}px;height:${2*r2}px;"></span>
+      <span class="size-label">¥10,000</span>
+    </span>`;
+  legendDiv.innerHTML = items.map(it => `
+    <span class="legend-item"><span class="dot" style="background:${it.color}"></span><span class="label">${it.label}</span></span>
+  `).join('') + sizeLegend;
+}
+
+// 初期化とリサイズ時に更新
+drawLegend();
+const ro = new ResizeObserver(() => { drawLegend(); });
+ro.observe(rootEl);
+```
+
+スタイル（`index.html` の `<style>` 内）:
+
+- `.legend-html`: `position: sticky; top: 0; z-index: 9; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 12px; background: #fff; border-bottom: 1px solid #eee;`
+- `.legend-item`: インラインフレックスで丸とラベルを横並び表示。
+- `.dot`: カテゴリ色を示す小さな丸（`width/height:10px; border-radius:50%`）。
+- `.size-bubble`: サイズ凡例用の空心の丸（`border: 2px solid #666`）。直径はインラインスタイルで指定。
+- `.size-label`: 目盛ラベル。
+
+カスタマイズ例:
+
+- サイズ凡例の値: `r(1000)` や `r(10000)` を任意の代表値に変更。
+- カラーパレット: `d3.schemeTableau10` を他の配列に差し替え。カテゴリ数が多い場合は `range([...palette, ...palette])` のように繰り返し。
+- 凡例の配置: sticky をやめて上部固定のヘッダ内や SVG 上（foreignObject/SVG テキスト）に移すことも可能。

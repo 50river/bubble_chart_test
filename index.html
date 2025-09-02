@@ -117,8 +117,10 @@
 	  const chartG = zoomLayer.append('g').attr('transform', `translate(${margin.left}, ${margin.top})`);
 	  const nodesG  = chartG.append('g').attr('class', 'nodes');
   const groupsG = chartG.append('g').attr('class', 'groups'); // グループタイトル等（ノードの上に表示）
-  // categoryモードで使用: 各カテゴリのセル境界（x0,y0,x1,y1）に収めるためのバウンディング
-  let categoryBounds = null; // Map<category, {x0,y0,x1,y1}>
+  // クラスタ（議員/カテゴリ）ごとのセル境界（x0,y0,x1,y1）に収めるためのバウンディング
+  let clusterBounds = null; // Map<clusterKey, {x0,y0,x1,y1}>
+  // tick 内でどのキーでクラスタリングしているかを参照する関数
+  let groupKeyFn = null; // (d) => string
 
   // 判例（カテゴリ＋サイズ）: スクロールに対して上部固定のHTMLに描画
   function drawLegend() {
@@ -162,7 +164,7 @@
 	  const nodes = nodesData.map(d => Object.assign({}, d));
 
 	  // ノード描画（サークル）
-	  const nodeSel = nodesG.selectAll('circle')
+  const nodeSel = nodesG.selectAll('circle')
 		.data(nodes, d => d.id)
 		.join('circle')
 		.attr('r', d => r(d.value))
@@ -224,22 +226,25 @@
 	  let currentMode = initialMode;
 
 	  // シミュレーション
-	  const sim = d3.forceSimulation(nodes)
+  const COLLIDE_PAD = 0.25; // 非重なりを維持しつつ最小限の隙間
+  const sim = d3.forceSimulation(nodes)
 		.force('x', d3.forceX())
 		.force('y', d3.forceY())
-		.force('collide', d3.forceCollide().radius(d => r(d.value) + 3).strength(1))
+		// 非重なりギリギリまで詰める（反復回数を増やす）
+		.force('collide', d3.forceCollide().radius(d => r(d.value) + COLLIDE_PAD).strength(1).iterations(4))
 		.alpha(1);
 
 	  // 全体モード用の詰め込み座標
 	  let allLayout = null; // Map(id => {x,y,r})
 
 	  sim.on('tick', () => {
-		if (currentMode === 'all' && allLayout) {
+	if (currentMode === 'all' && allLayout) {
 		  nodeSel.attr('cx', d => allLayout.get(d.id)?.x ?? d.x)
 				 .attr('cy', d => allLayout.get(d.id)?.y ?? d.y);
-		} else if (currentMode === 'category' && categoryBounds) {
+		} else if ((currentMode === 'category' || currentMode === 'member') && clusterBounds && groupKeyFn) {
 		  nodeSel.each(function(d){
-			const b = categoryBounds.get(d.category);
+			const key = groupKeyFn(d);
+			const b = clusterBounds.get(key);
 			if (!b) return;
 			const rr = r(d.value);
 			d.x = Math.max(b.x0 + rr, Math.min(b.x1 - rr, d.x));
@@ -255,7 +260,8 @@
   function suggestedColsFor(groupsCount, extraGap = 0) {
 		const innerW = width - margin.left - margin.right;
 		const rMax = d3.max(nodes, d => r(d.value)) || 20;
-		const cellW = Math.max(2 * rMax + 24 + extraGap, 96 + extraGap); // 余白込みの最小セル幅
+		// 余白を抑えてセル幅を小さく
+		const cellW = Math.max(2 * rMax + 8 + extraGap, 72 + extraGap); // 余白込みの最小セル幅
 		const cols = Math.floor(innerW / cellW) || 1;
 		return Math.max(1, Math.min(groupsCount, cols));
 	  }
@@ -270,7 +276,8 @@
     const innerW = width - margin.left - margin.right;
     const innerH = height - margin.top - margin.bottom;
     const rMax = d3.max(nodes, d => r(d.value)) || 20;
-    const baseCellDefault = Math.max(2 * rMax + 24 + extraGap, 96 + extraGap);
+    // セルの基本サイズもやや小さく
+    const baseCellDefault = Math.max(2 * rMax + 6 + extraGap, 68 + extraGap);
     const baseCell = Math.max(baseCellDefault, opts.minCell || 0);
 
     let cols;
@@ -302,26 +309,33 @@
 		let centers;
     if (mode === 'member') {
       allLayout = null; // 詰め込み無効
-      categoryBounds = null;
+      clusterBounds = null;
 		  const members = Array.from(new Set(nodes.map(d => d.memberName)));
-		  const grid = layoutGrid(members, 32); // 余白を追加して見やすく
+		  // 余白を最小限にして密度を上げる
+		  const grid = layoutGrid(members, 4);
 		  centers = grid.centers;
 		  sim.force('x').x(d => centers.get(d.memberName).cx);
 		  sim.force('y').y(d => centers.get(d.memberName).cy);
 		  updateGroupLabels(centers, k => k);
 		  // 半径はスムーズに戻す、物理遷移も滑らかに
 		  nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', d => r(d.value));
-		  sim.alphaTarget(0.25).alpha(0.9).restart();
+		  sim.alphaTarget(0.35).alpha(1).restart();
 		  d3.timeout(() => sim.alphaTarget(0), 800);
 		  // SVG高さを必要分だけ伸ばす（スクロール対応）
 		  const totalH = margin.top + grid.innerHeight + margin.bottom;
 		  svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
-		  // 議員モードは縦スクロールのみ（ズーム無し）
+		  // メンバーごとのバウンディング（非重なりでギリギリまで詰める）
+		  clusterBounds = new Map(Array.from(centers.entries()).map(([k, c]) => {
+			const x0 = c.cx - grid.cellW/2, y0 = c.cy - grid.cellH/2;
+			const x1 = c.cx + grid.cellW/2, y1 = c.cy + grid.cellH/2;
+			return [k, {x0, y0, x1, y1}];
+		  }));
+		  groupKeyFn = d => d.memberName;
     } else if (mode === 'category') {
       allLayout = null; // 詰め込み無効
       // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-      const eff = 0.75; // 充填効率の目安
-      const pad = 2;    // バブル周りの余白（半径に加算）
+      const eff = 0.85; // 充填効率を高めにしてセルをコンパクトに
+      const pad = COLLIDE_PAD;    // バブル周りの余白（半径に加算）を最小化
       const needDiamByCat = new Map(categories.map(cat => {
         const sumR2 = d3.sum(nodes.filter(n => n.category === cat), n => {
           const rr = r(n.value) + pad; return rr*rr;
@@ -331,33 +345,36 @@
       }));
       const minCellCat = Math.max(...Array.from(needDiamByCat.values()).concat([0]));
       // 幅に合わせて列数を自動調整（縦方向は必要分だけ伸ばす＝スクロール可能）
-      const gridC = layoutGrid(categories, 16, { minCell: minCellCat });
+      const gridC = layoutGrid(categories, 4, { minCell: minCellCat });
       centers = gridC.centers;
       sim.force('x').x(d => centers.get(d.category).cx);
       sim.force('y').y(d => centers.get(d.category).cy);
       updateGroupLabels(centers, k => k);
       nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', d => r(d.value));
-      sim.alphaTarget(0.25).alpha(0.9).restart();
+      sim.alphaTarget(0.35).alpha(1).restart();
       d3.timeout(() => sim.alphaTarget(0), 800);
       // SVG高さは内容に応じて拡張（縦スクロール可能に）
       const totalH = margin.top + gridC.innerHeight + margin.bottom;
       svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
       // カテゴリごとのバウンディングを用意し、はみ出しを抑制
-      categoryBounds = new Map(Array.from(centers.entries()).map(([k, c]) => {
+      clusterBounds = new Map(Array.from(centers.entries()).map(([k, c]) => {
         const x0 = c.cx - gridC.cellW/2, y0 = c.cy - gridC.cellH/2;
         const x1 = c.cx + gridC.cellW/2, y1 = c.cy + gridC.cellH/2;
         return [k, {x0, y0, x1, y1}];
       }));
+      groupKeyFn = d => d.category;
     } else {
-      categoryBounds = null;
+      clusterBounds = null;
+      groupKeyFn = null;
       // 全体表示は詰め込みレイアウトで必ず領域内に収める
 		  const innerW = width - margin.left - margin.right;
 		  const innerH = height - margin.top - margin.bottom;
-		  const h = d3.hierarchy({children: nodes.map(d => ({id: d.id, value: d.value}))}).sum(d => d.value);
-		  const packed = d3.pack().size([innerW, innerH]).padding(2)(h);
+      const h = d3.hierarchy({children: nodes.map(d => ({id: d.id, value: d.value}))}).sum(d => d.value);
+		  // パックレイアウトの余白を最小限に（非重なりギリギリ）
+		  const packed = d3.pack().size([innerW, innerH]).padding(0.25)(h);
 		  const leaves = packed.leaves();
 		  allLayout = new Map(leaves.map(l => [l.data.id, {x: l.x, y: l.y, r: l.r}]));
-		  // ラベルは無し
+      // ラベルは無し
 		  updateGroupLabels(new Map(), () => '');
 		  // 座標・半径をスムーズに遷移（はみ出し防止）
 		  nodeSel
