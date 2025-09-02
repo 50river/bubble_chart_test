@@ -123,10 +123,17 @@
   let groupKeyFn = null; // (d) => string
 
   // 判例（カテゴリ＋サイズ）: スクロールに対して上部固定のHTMLに描画
+  // 現在モードに応じて凡例のサイズを算出
   function drawLegend() {
     const items = categories.map(c => ({ key: c, label: c, color: color(c) }));
-    const r1 = Math.max(2, r(1000));
-    const r2 = Math.max(2, r(10000));
+    const legendRadius = (val) => {
+      if (currentMode === 'all' && packRadiusK) {
+        return Math.max(2, packRadiusK * Math.sqrt(val));
+      }
+      return Math.max(2, r(val));
+    };
+    const r1 = legendRadius(1000);
+    const r2 = legendRadius(10000);
     const sizeLegend = `
       <span class="legend-item">
         <strong>サイズ:</strong>
@@ -146,8 +153,10 @@
 	  const color = d3.scaleOrdinal().domain(categories).range(CATEGORY_COLORS.concat(CATEGORY_COLORS));
 
 	  // 半径スケール（値→ピクセル半径）。平方根スケールで極端な値の影響を緩和
-	  const vExtent = d3.extent(nodesData, d => d.value);
-	  const r = d3.scaleSqrt().domain(vExtent).range([6, 28]);
+  const vExtent = d3.extent(nodesData, d => d.value);
+  const r = d3.scaleSqrt().domain(vExtent).range([6, 28]);
+  // 全体表示（pack）時の半径スケール係数（r_pack = packRadiusK * sqrt(value)）
+  let packRadiusK = null;
 
 	  // ツールチップ
 	  const tip = d3.select(rootEl).append('div')
@@ -310,6 +319,7 @@
     if (mode === 'member') {
       allLayout = null; // 詰め込み無効
       clusterBounds = null;
+      packRadiusK = null;
       		  const members = Array.from(new Set(nodes.map(d => d.memberName)));
       		  // 必要セルサイズを面積から推定（非重なり前提）
       		  const effM = 0.85; // 充填効率を高めに設定
@@ -343,6 +353,7 @@
 		  groupKeyFn = d => d.memberName;
     } else if (mode === 'category') {
       allLayout = null; // 詰め込み無効
+      packRadiusK = null;
       // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
       const eff = 0.85; // 充填効率を高めにしてセルをコンパクトに
       const pad = COLLIDE_PAD;    // バブル周りの余白（半径に加算）を最小化
@@ -380,12 +391,17 @@
 		  const innerW = width - margin.left - margin.right;
 		  const innerH = height - margin.top - margin.bottom;
       const h = d3.hierarchy({children: nodes.map(d => ({id: d.id, value: d.value}))}).sum(d => d.value);
-		  // パックレイアウトの余白を最小限に（非重なりギリギリ）
-		  const packed = d3.pack().size([innerW, innerH]).padding(0.25)(h);
-		  const leaves = packed.leaves();
-		  allLayout = new Map(leaves.map(l => [l.data.id, {x: l.x, y: l.y, r: l.r}]));
+      // パックレイアウトの余白を最小限に（非重なりギリギリ）
+      const packed = d3.pack().size([innerW, innerH]).padding(0.25)(h);
+      const leaves = packed.leaves();
+      // pack の半径は sqrt(value) に比例するため、係数を推定して凡例に反映
+      const ks = leaves
+        .filter(l => l.data.value > 0)
+        .map(l => l.r / Math.sqrt(l.data.value));
+      packRadiusK = ks.length ? d3.median(ks) : null;
+      allLayout = new Map(leaves.map(l => [l.data.id, {x: l.x, y: l.y, r: l.r}]));
       // ラベルは無し
-		  updateGroupLabels(new Map(), () => '');
+      updateGroupLabels(new Map(), () => '');
 		  // 座標・半径をスムーズに遷移（はみ出し防止）
 		  nodeSel
 			.transition().duration(700).ease(d3.easeCubicInOut)
@@ -402,6 +418,9 @@
 		  // SVGは表示領域サイズに戻す（スクロールコンテナにフィット）
 		  svg.attr('viewBox', [0, 0, width, height]).attr('height', '100%');
 		}
+
+		// モード変更に応じて凡例サイズを更新
+		drawLegend();
 	  }
 
 	  // 初期: 凡例→マージン調整→モード適用
@@ -413,7 +432,6 @@
 		width  = rootEl.clientWidth  || width;
 		height = rootEl.clientHeight || height;
 		svg.attr('viewBox', [0, 0, width, height]);
-		drawLegend();
 		setMode(currentMode);
 	  });
 	  ro.observe(rootEl);
