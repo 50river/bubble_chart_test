@@ -231,7 +231,7 @@
 		.force('x', d3.forceX())
 		.force('y', d3.forceY())
 		// 非重なりギリギリまで詰める（反復回数を増やす）
-		.force('collide', d3.forceCollide().radius(d => r(d.value) + COLLIDE_PAD).strength(1).iterations(4))
+		.force('collide', d3.forceCollide().radius(d => r(d.value) + COLLIDE_PAD).strength(1).iterations(6))
 		.alpha(1);
 
 	  // 全体モード用の詰め込み座標
@@ -310,9 +310,19 @@
     if (mode === 'member') {
       allLayout = null; // 詰め込み無効
       clusterBounds = null;
-		  const members = Array.from(new Set(nodes.map(d => d.memberName)));
-		  // 余白を最小限にして密度を上げる
-		  const grid = layoutGrid(members, 4);
+      		  const members = Array.from(new Set(nodes.map(d => d.memberName)));
+      		  // 必要セルサイズを面積から推定（非重なり前提）
+      		  const effM = 0.85; // 充填効率を高めに設定
+      		  const needDiamByMember = new Map(members.map(mname => {
+      			const sumR2 = d3.sum(nodes.filter(n => n.memberName === mname), n => {
+      			  const rr = r(n.value) + COLLIDE_PAD; return rr*rr;
+      			});
+      			const needRadius = Math.sqrt(sumR2 / effM);
+      			return [mname, 2 * needRadius];
+      		  }));
+      		  const minCellMember = Math.max(...Array.from(needDiamByMember.values()).concat([0]));
+      		  // 余白を最小限にして密度を上げる（minCell を適用）
+      		  const grid = layoutGrid(members, 4, { minCell: minCellMember });
 		  centers = grid.centers;
 		  sim.force('x').x(d => centers.get(d.memberName).cx);
 		  sim.force('y').y(d => centers.get(d.memberName).cy);
