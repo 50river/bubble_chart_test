@@ -488,14 +488,29 @@
   btnModeAll.addEventListener('click', () => {
     if (chart) chart.setMode('all');
     activateModeBtn(btnModeAll);
+    scrollToHeaderAndResetChart();
   });
   btnModeByMember.addEventListener('click', () => {
     if (chart) chart.setMode('member');
     activateModeBtn(btnModeByMember);
+    scrollToHeaderAndResetChart();
   });
   btnModeByCategory.addEventListener('click', () => {
     if (chart) chart.setMode('category');
     activateModeBtn(btnModeByCategory);
+    scrollToHeaderAndResetChart();
   });
-})();
 
+  // モード切替時はヘッダー位置までスクロールし、チャート内スクロールも先頭へ
+  function scrollToHeaderAndResetChart() {
+    const headerEl = document.querySelector('header');
+    if (headerEl) {
+      const top = headerEl.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({ top, behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    const root = document.getElementById('bubble-root');
+    if (root) root.scrollTop = 0;
+  }
+})();
