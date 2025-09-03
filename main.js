@@ -31,10 +31,8 @@
   function createBubbleChart(rootEl, nodesData, initialMode = 'all') {
     rootEl.innerHTML = '';
     const margin = { top: 56, right: 16, bottom: 16, left: 16 };
-    const headerEl0 = document.querySelector('header');
-    const headerH0 = headerEl0 ? headerEl0.offsetHeight : 58;
     let width = rootEl.clientWidth || 960;
-    let height = rootEl.clientHeight || (window.innerHeight - headerH0) || 600;
+    let height = rootEl.clientHeight || 600;
 
     // 凡例（HTML, sticky）を先に配置
     // 凡例（HTML要素）: sticky配置のため、SVG外にHTMLで用意
@@ -394,8 +392,8 @@
         });
         // シミュレーションは停止（他モードに切替時に再開）
         sim.alpha(0).stop();
-        // SVGは表示領域サイズに戻す（ピクセル高さで安定させる）
-        svg.attr('viewBox', [0, 0, width, height]).attr('height', height);
+        // SVGは表示領域サイズに戻す（スクロールコンテナにフィット）
+        svg.attr('viewBox', [0, 0, width, height]).attr('height', '100%');
       }
 
       // モード変更に応じて凡例サイズを更新
@@ -409,9 +407,7 @@
     // リサイズ時に座標再計算
     const ro = new ResizeObserver(() => {
       width = rootEl.clientWidth || width;
-      const headerEl = document.querySelector('header');
-      const hHeader = headerEl ? headerEl.offsetHeight : 58;
-      height = rootEl.clientHeight || (window.innerHeight - hHeader) || height;
+      height = rootEl.clientHeight || height;
       svg.attr('viewBox', [0, 0, width, height]);
       setMode(currentMode);
     });
@@ -516,29 +512,5 @@
     }
     const root = document.getElementById('bubble-root');
     if (root) root.scrollTop = 0;
-  }
-
-  // 本文へスムーススクロール（モバイルの到達性改善）
-  function scrollToArticle() {
-    const article = document.getElementById('article-content');
-    if (!article) return;
-    const headerEl = document.querySelector('header');
-    const headerH = headerEl ? headerEl.offsetHeight : 58;
-    const y = article.getBoundingClientRect().top + window.pageYOffset - headerH;
-    window.scrollTo({ top: y, behavior: 'smooth' });
-  }
-  const jumpBtn = document.getElementById('jump-to-article');
-  if (jumpBtn) {
-    jumpBtn.addEventListener('click', scrollToArticle);
-    const article = document.getElementById('article-content');
-    if ('IntersectionObserver' in window && article) {
-      const io = new IntersectionObserver((entries) => {
-        const e = entries[0];
-        const visible = e && e.isIntersecting;
-        jumpBtn.style.opacity = visible ? '0' : '1';
-        jumpBtn.style.pointerEvents = visible ? 'none' : 'auto';
-      }, { threshold: 0.1 });
-      io.observe(article);
-    }
   }
 })();

@@ -18,7 +18,7 @@ header {
 /* ビューポート内スクロール（ヘッダ分を差し引く）
    - この要素がスクロールコンテナ。内部のSVGはここにフィット or 拡張。
    - 100vh - 58px: ヘッダの実高さに合わせて調整。 */
-#bubble-root { width: 100%; height: calc(100vh - var(--header-h, 58px)); min-height: 420px; overflow-y: auto; overflow-x: hidden; }
+#bubble-root { width: 100%; height: calc(100vh - 58px); min-height: 420px; overflow-y: auto; overflow-x: hidden; }
 svg { display: block; /* インライン要素の行間や余白の影響を受けないように block */ }
 /* タッチデバイスでの縦スクロール優先 */
 #bubble-root { touch-action: pan-y; }
@@ -34,12 +34,11 @@ svg { display: block; /* インライン要素の行間や余白の影響を受�
 
 /* 動的ビューポート高さ (モバイルのアドレスバーを考慮) */
 @supports (height: 100dvh) {
-  #bubble-root { height: calc(100dvh - var(--header-h, 58px)); }
+  #bubble-root { height: calc(100dvh - 58px); }
 }
 
 /* 色やスペースの管理用カスタムプロパティ */
 :root {
-  --header-h: 58px;
   --content-max: 980px;
   --text-color: #222;
   --muted-color: #666;
@@ -85,11 +84,6 @@ svg { display: block; /* インライン要素の行間や余白の影響を受�
 
 /* モバイル最適化 */
 @media (max-width: 640px) {
-  /* モバイルではページ全体でスクロール（ネストスクロール無効化） */
-  #bubble-root { height: auto; min-height: 60vh; overflow: visible; }
-  @supports (height: 100dvh) {
-    #bubble-root { min-height: 60dvh; }
-  }
   #article-content .content-wrap { padding: 20px 14px 44px; line-height: 1.95; }
   #article-content h2 { margin: 6px 0 12px; }
   #article-content h3 { margin: 16px 0 6px; }
@@ -97,19 +91,6 @@ svg { display: block; /* インライン要素の行間や余白の影響を受�
   #article-content ol.numbered { padding-left: 1.1rem; }
   #article-content ul { padding-left: 1.1rem; }
   #article-content ol.numbered > li { margin: 10px 0; }
-  /* 凡例はヘッダーの下に固定 */
-  .legend-html { top: var(--header-h, 58px); }
-}
-
-/* 本文へジャンプ（モバイル向け） */
-.jump-btn {
-  position: fixed; right: 12px; bottom: 12px; z-index: 20;
-  padding: 10px 14px; border-radius: 999px; border: 1px solid #d0d7ff;
-  background: #f3f6ff; color: #163366; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  display: none; transition: opacity .2s ease;
-}
-@media (max-width: 640px) {
-  .jump-btn { display: inline-flex; align-items: center; gap: 6px; }
 }
 
 /* ダークモード配色（任意） */
