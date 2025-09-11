@@ -1,42 +1,40 @@
 # バブルチャート（議員 × 支出項目）
 
-シンプルな静的サイトで、`members_expenses.json` を読み込み、D3.js を使って議員ごとの支出項目をバブルチャートで可視化します。表示モード（全体／議員ごと／項目ごと）を切り替えられます。
+`members_expenses.json` を読み込み、D3.js で議員×支出項目のバブルチャートを描画します。表示モードは「全体」「議員ごと」「項目ごと」に切り替え可能で、重なりを避けつつ各グループ内は“できるだけ密に”寄せるよう最適化しています。
 
 - 使用技術: D3.js v7（CDN）、プレーン HTML/CSS/JS
 - 配布形態: ビルド不要の静的ファイル（`index.html` / `styles.css` / `main.js` / JSON）
-- 動作環境: 近年のモダンブラウザ（CDN 利用のためインターネット接続が必要）
+- 動作環境: 近年のモダンブラウザ
 
-## デモの起動方法（ローカル）
+## 起動方法（ローカル）
 
-`fetch` を使って JSON を読み込むため、`file://` 直接オープンは CORS で失敗します。必ずローカルサーバで配信してください。
+`fetch` で JSON を読み込むため、`file://` 直接オープンは CORS で失敗します。ローカルサーバで配信してください。
 
 1. ターミナルで本ディレクトリへ移動
-2. 簡易サーバを起動（どちらか）
+2. 簡易サーバを起動（いずれか）
    - Python 3: `python3 -m http.server 8000`
-   - Node.js(npx): `npx serve -l 8000`（serve が未インストールなら `npm i -g serve`）
+   - Node.js: `npx serve -l 8000`（未導入なら `npm i -g serve`）
 3. ブラウザで `http://localhost:8000/` を開く
 
-同階層の `members_expenses.json` が自動で読み込まれ、チャートが表示されます。
+同階層の `members_expenses.json` を自動読み込みします。
 
 ## GitHub Pages での公開
 
-1. 本リポジトリを GitHub に push
-2. GitHub のリポジトリ設定 → Pages → `Deploy from a branch` を選択
-3. Branch を `main`（または `master`）/ `/ (root)` に設定して保存
-4. 数分後に表示される URL にアクセス
-
-Pages 配信であれば `fetch('./members_expenses.json')` がそのまま動作します。
+1. リポジトリを GitHub へ push
+2. Settings → Pages → `Deploy from a branch`
+3. Branch: `main`（または `master`）/ `/(root)` を選択
+4. 数分後に表示される URL へアクセス
 
 ## ファイル構成
 
-- `index.html`: チャート本体（UIの骨組み）
-- `styles.css`: スタイル（レイアウト/凡例/ボタンなど）
-- `main.js`: ロジック（描画、力学レイアウト、モード切替）
-- `members_expenses.json`: データサンプル（同ディレクトリから自動読み込み）
+- `index.html`: 画面の骨組み（ヘッダ、モード切替ボタン、ルート要素）
+- `styles.css`: スタイル（sticky 凡例、レイアウトなど）
+- `main.js`: 描画・レイアウト・モード切替のロジック
+- `members_expenses.json`: データ（同一ディレクトリから自動読み込み）
 
 ## データ形式（JSON）
 
-`members_expenses.json` は以下のような配列です。
+`members_expenses.json` は以下の配列です（例）。
 
 ```json
 [
@@ -53,110 +51,104 @@ Pages 配信であれば `fetch('./members_expenses.json')` がそのまま動�
 ]
 ```
 
-`index.html` 内でこの階層データを以下のフラット形式に変換して描画します：
+起動時にフラット配列へ変換して描画します：
 
 ```js
 // { id, memberId, memberName, category, value }
 { id: "m01-広報", memberId: "m01", memberName: "田中 太郎", category: "広報", value: 145000 }
 ```
 
-- `category`: 任意の文字列（カテゴリ名）
-- `value`: 数値（バブルの大きさに反映。単位は任意）
-
-## 使い方（UI / 操作）
+## UI と操作
 
 - 「全体」: すべての支出を 1 つのパックレイアウトで表示
-- 「議員ごと」: 議員ごとのセルにクラスタリングして表示
-- 「項目ごと」: 項目カテゴリごとのセルにクラスタリングして表示
-- ツールチップ: バブルにマウスオーバーで詳細（氏名／カテゴリ／金額）
-- 凡例: カテゴリ色とサイズの目安（¥1,000 / ¥10,000）を上部に表示
+- 「議員ごと」: 議員単位にセルへ分割して表示（グループ内は最密に近く詰める）
+- 「項目ごと」: 項目カテゴリ単位にセルへ分割
+- ツールチップ: バブルにホバーで詳細（氏名／カテゴリ／金額）
+- 凡例（sticky）: カテゴリ色とサイズ目安を `#bubble-root` の先頭に固定表示
+- リサイズ追従: `ResizeObserver` で自動再レイアウト
 
-レスポンシブ対応：表示領域のリサイズ（ウィンドウサイズ変更）に追従します。
+## 実装の全体像
 
-## カスタマイズのポイント
+- データ整形: `flattenMembers()` で階層 JSON → フラット配列
+- 色スケール: カテゴリ → 色（`d3.schemeTableau10`）
+- 半径スケール: 値 → 半径（平方根スケール）。全体モードで得たスケール係数を共有して各モードで一貫性を維持
+- 凡例: カテゴリ色＋サイズ凡例。サイズは全データの値をもとに「ジェンクス自然分類（3 クラス）」で代表値を出し、丸の大きさで提示
+- レイアウト
+  - 全体モード: `d3.pack()` による詰め込み（`padding` は最小限）。得られた半径からグローバル係数 `globalRadiusK` を推定
+  - 議員/項目モード: 各グループを `d3.packSiblings()` で最密に近く詰め、グリッドのセル中心に平行移動。最後に軽い衝突除去を行い、境界外へのはみ出しを防止
+- 衝突回避
+  - 物理シミュレーションの `forceCollide`（全体/初期用）
+  - グループ内は「d3.packSiblings → 局所リラクゼーション（ペア押し広げ）」の二段構え
 
-- カラー: `d3.schemeTableau10` を使用。カテゴリ数が多い場合は自動ループ（`range(CATEGORY_COLORS.concat(CATEGORY_COLORS))`）。
-- 半径スケール: `d3.scaleSqrt()`。値の最小・最大から `[6, 28]px` にマップ。見た目調整は `range` を変更。
-- 初期モード: `createBubbleChart(el, bubbles, 'all')` の第3引数で変更可能（`'all' | 'member' | 'category'`）。
-- データ項目名: データ構造を変えたい場合は `flattenMembers()` を編集。
-- タイトル等: `<title>` や `<header>` 内文言を編集。
+## レイアウトと重なり制御の詳細
+
+- パラメータ
+  - `COLLIDE_PAD = 0.8`: 全体/力学系での最小クリアランス
+  - `INNER_PAD = 0.35`: グループ内での最小クリアランス（見た目のごく薄い隙間）
+- グループ内の手順
+  1) `d3.packSiblings()` に各円の半径（`bubbleRadius(value) + INNER_PAD`）を渡し、原点付近で最密に近い配置を得る
+  2) 得られた配置のバウンディングボックスから必要セルサイズを決定（推測ではなく実測値）。幅が足りないセルは自動で列数を増やし、SVG 高さを伸ばす
+  3) セル中心へ並進後、ペアごとの押し広げ（局所リラクゼーション）で微小な食い込みを除去。最後にセル境界内へクランプ
+
+この組合せにより、「重なりは発生しない」「かつ、グループ感が強い（できるだけ密）」という見た目を両立しています。
+
+## サイズ凡例とジェンクス自然分類（やさしい解説）
+
+凡例のサイズは、単なる固定値ではなく、データのばらつきに合わせて自動で分かりやすい代表値を選びます。そのために「ジェンクス自然分類（Jenks natural breaks）」という手法を使っています。
+
+### ジェンクス自然分類とは？
+
+- 目的: 数値の集合を k 個のグループに区切るとき、「同じグループの値は似ていて、違うグループの値は離れている」ように分けたい
+- 直感: ヒストグラムで“山”がいくつか見えたら、その“谷”の位置に境界線を引くイメージ
+- 形式: 各グループ内のばらつき（分散）をできるだけ小さく、グループ間の差をできるだけ大きくする区切り（ブレークポイント）を見つける
+
+### どうやって求めるの？（動的計画法のイメージ）
+
+1. まずデータを小さい順に並べます
+2. 「先頭から i 個の値を j グループに分けたときの最小の“合計ばらつき”」を表にして、手前から順に埋めていきます
+3. その際、どこで区切ると最小になるかも同時に記録しておきます
+4. 最後に表を後ろからたどると、最適な区切り位置（ブレークポイント）が復元できます
+
+この表埋めを「動的計画法（Dynamic Programming）」と呼びます。実装上は、分散の合計（残差平方和）を最小化するように j を 1→k へ広げながら計算します。
+
+### 本実装での扱い
+
+- 関数: `jenksBreaks(values, k)`（`main.js`）
+- 入力: 値配列 `values` とクラス数 `k`（本ツールでは k=3 を凡例表示に使用）
+- 出力: `[min, b1, b2, max]` のようなブレーク配列
+- 用途: `[b1, b2, max]` を代表値として丸のサイズ見本を描画
+- フォールバック: データ数が少ない等で安定しない場合は分位点（1/3, 2/3）で代用
+
+### ジェンクスの利点と注意
+
+- 利点: “自然な区切れ目”を自動で捉えやすく、極端値に引きずられにくい
+- 注意: k の選び方で印象が変わる。ここでは凡例の視認性を優先して 3 クラスに固定
+
+## スタイル / 凡例の配置
+
+- 凡例は HTML で描画し、`#bubble-root` の先頭に `position: sticky; top: 0;` で固定
+- カテゴリ色は `d3.scaleOrdinal` × `d3.schemeTableau10`（カテゴリ数が多い場合は自動で繰り返し）
+- サイズ凡例はジェンクスの代表値を `bubbleRadius` に通し、直径を CSS の `width/height` で示す
+
+## 調整パラメータ（どこを変えれば見た目がどう変わるか）
+
+- `main.js`
+  - `COLLIDE_PAD`（既定 0.8）: 全体/力学系の最小すき間。小さくすると密、重なるリスク増
+  - `INNER_PAD`（既定 0.35）: グループ内の最小すき間。小さくするとさらに“ぎゅっ”と寄る
+  - `relaxNoOverlap(..., iter)` の反復回数: 大きくすると重なり解消は堅牢に、コストは増
+  - 半径レンジ: `d3.scaleSqrt().range([6, 28])` を調整
 
 ## よくあるハマりどころ
 
-- 直接ファイルオープン（`file://`）では JSON 読み込みに失敗します。必ず HTTP で配信してください（ローカルサーバ or GitHub Pages）。
-- CDN（`https://cdn.jsdelivr.net/npm/d3@7`）にアクセスできない環境では表示できません。イントラネットで利用する場合は D3 を同梱するか、CDN ミラーをご利用ください。
+- `file://` 直開きは不可。必ず HTTP で配信
+- CDN（`https://cdn.jsdelivr.net/npm/d3@7`）にアクセスできない環境では表示不可。必要に応じて D3 を同梱
 
-## ライセンス
-
-未定（必要に応じて追記してください）。
-
-## 謝辞 / クレジット
+## ライセンス / クレジット
 
 - D3.js (Mike Bostock 他)
 - カラースキーム: Tableau 10（D3 内蔵）
+- ライセンス: 必要に応じて追記してください
 
 ---
 
-不明点や要望（例: 軸の追加、検索フィルタ、PNG エクスポート等）があれば Issue でお知らせください。
-
-## 判例（Legend）の実装について
-
-本実装では、凡例を SVG の外に HTML 要素として配置し、`#bubble-root` 内で `position: sticky; top: 0;` によりスクロール先頭固定にしています。SVG のズームや再レイアウトとは独立しており、読みやすさを優先した構成です。
-
-- 構成: ルート要素内に先に凡例（HTML）、続いて SVG を append します。
-- 固定位置: `#bubble-root` がスクロールコンテナ、凡例はその先頭で sticky 固定。
-- カテゴリ色: D3 の ordinal スケール（`d3.schemeTableau10`）でカテゴリ→色を割当。
-- サイズ凡例: 値（例: 1000 / 10000）を半径スケール `r()` に通して丸の直径を算出し、CSS の `width/height` へ反映。
-- リサイズ対応: `ResizeObserver` でサイズ変動時に `drawLegend()` を呼び出して更新。
-
-関連コード（抜粋, `index.html`）:
-
-```js
-// 1) 先に凡例用の HTML を用意して root に追加
-const legendDiv = document.createElement('div');
-legendDiv.className = 'legend-html';
-rootEl.appendChild(legendDiv);
-
-// 2) カテゴリと色の定義（カテゴリはデータからユニーク抽出）
-const categories = Array.from(new Set(nodesData.map(d => d.category)));
-const color = d3.scaleOrdinal().domain(categories).range(d3.schemeTableau10.concat(d3.schemeTableau10));
-
-// 3) 半径スケール（値→半径）と凡例の描画
-const r = d3.scaleSqrt().domain(d3.extent(nodesData, d => d.value)).range([6, 28]);
-
-function drawLegend() {
-  const items = categories.map(c => ({ key: c, label: c, color: color(c) }));
-  const r1 = Math.max(2, r(1000));
-  const r2 = Math.max(2, r(10000));
-  const sizeLegend = `
-    <span class="legend-item">
-      <strong>サイズ:</strong>
-      <span class="size-bubble" style="width:${2*r1}px;height:${2*r1}px;"></span>
-      <span class="size-label">¥1,000</span>
-      <span class="size-bubble" style="width:${2*r2}px;height:${2*r2}px;"></span>
-      <span class="size-label">¥10,000</span>
-    </span>`;
-  legendDiv.innerHTML = items.map(it => `
-    <span class="legend-item"><span class="dot" style="background:${it.color}"></span><span class="label">${it.label}</span></span>
-  `).join('') + sizeLegend;
-}
-
-// 初期化とリサイズ時に更新
-drawLegend();
-const ro = new ResizeObserver(() => { drawLegend(); });
-ro.observe(rootEl);
-```
-
-スタイル（`styles.css`）:
-
-- `.legend-html`: `position: sticky; top: 0; z-index: 9; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 12px; background: #fff; border-bottom: 1px solid #eee;`
-- `.legend-item`: インラインフレックスで丸とラベルを横並び表示。
-- `.dot`: カテゴリ色を示す小さな丸（`width/height:10px; border-radius:50%`）。
-- `.size-bubble`: サイズ凡例用の空心の丸（`border: 2px solid #666`）。直径はインラインスタイルで指定。
-- `.size-label`: 目盛ラベル。
-
-カスタマイズ例:
-
-- サイズ凡例の値: `r(1000)` や `r(10000)` を任意の代表値に変更。
-- カラーパレット: `d3.schemeTableau10` を他の配列に差し替え。カテゴリ数が多い場合は `range([...palette, ...palette])` のように繰り返し。
-- 凡例の配置: sticky をやめて上部固定のヘッダ内や SVG 上（foreignObject/SVG テキスト）に移すことも可能。
+要望（例: 絞り込み・検索、PNG エクスポート、凡例の表示値固定化、色分けルール変更 等）があれば Issue まで。ジェンクスの k を変更したい場合は `drawLegend()` 付近の呼び出しとラベルの出し方を調整してください。
