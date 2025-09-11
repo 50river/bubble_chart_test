@@ -58,25 +58,83 @@
     // tick 内でどのキーでクラスタリングしているかを参照する関数
     let groupKeyFn = null; // (d) => string
 
-    // 判例（カテゴリ＋サイズ）: スクロールに対して上部固定のHTMLに描画
-    // 現在モードに応じて凡例のサイズを算出
+    // ユーティリティ: 通貨表示
+    const fmtYen = (v) => `¥${d3.format(',')(Math.round(v))}`;
+
+    // Jenks natural breaks（k分類）
+    // 参考: 動的計画法による分割（小さめの実装）
+    function jenksBreaks(values, k) {
+      const vals = values.filter((v) => Number.isFinite(v)).slice().sort((a, b) => a - b);
+      const n = vals.length;
+      if (n === 0) return [];
+      const unique = Array.from(new Set(vals));
+      if (unique.length <= k) return unique;
+      // DP テーブル
+      const mat1 = Array.from({ length: n + 1 }, () => Array(k + 1).fill(0));
+      const mat2 = Array.from({ length: n + 1 }, () => Array(k + 1).fill(0));
+      for (let i = 1; i <= k; i++) {
+        mat1[1][i] = 1;
+        mat2[1][i] = 0;
+        for (let j = 2; j <= n; j++) mat2[j][i] = Infinity;
+      }
+      let s1 = 0, s2 = 0, w = 0;
+      for (let l = 2; l <= n; l++) {
+        s1 = 0; s2 = 0; w = 0;
+        for (let m = 1; m <= l; m++) {
+          const i3 = l - m + 1;
+          const val = vals[i3 - 1];
+          s2 += val * val; s1 += val; w += 1;
+          const v = s2 - (s1 * s1) / w; // クラス内分散
+          if (i3 === 1) continue;
+          for (let j = 2; j <= k; j++) {
+            if (mat2[l][j] >= v + mat2[i3 - 1][j - 1]) {
+              mat1[l][j] = i3;
+              mat2[l][j] = v + mat2[i3 - 1][j - 1];
+            }
+          }
+        }
+        mat1[l][1] = 1;
+        mat2[l][1] = s2 - (s1 * s1) / w;
+      }
+      const breaks = Array(k + 1).fill(0);
+      breaks[k] = vals[n - 1];
+      breaks[0] = vals[0];
+      let kclass = k;
+      let idx = n;
+      while (kclass > 1) {
+        const id = mat1[idx][kclass] - 1;
+        breaks[kclass - 1] = vals[id];
+        idx = mat1[idx][kclass] - 1;
+        kclass--;
+      }
+      return breaks;
+    }
+
+    // 判例（カテゴリ＋サイズ）。サイズは Jenks の3分割を表示し、スケールは常に全体表示のスケールを継承
     function drawLegend() {
       const items = categories.map((c) => ({ key: c, label: c, color: color(c) }));
-      const legendRadius = (val) => {
-        if (currentMode === 'all' && packRadiusK) {
-          return Math.max(2, packRadiusK * Math.sqrt(val));
-        }
-        return Math.max(2, r(val));
-      };
-      const r1 = legendRadius(1000);
-      const r2 = legendRadius(10000);
+      // 全データの値から Jenks 3 クラスを計算
+      const valuesAll = nodesData.map((d) => d.value).filter((v) => Number.isFinite(v) && v > 0);
+      let breaks = [];
+      if (valuesAll.length >= 3) {
+        breaks = jenksBreaks(valuesAll, 3); // [min, b1, b2, max]
+      } else {
+        // フォールバック: 分位点
+        breaks = [d3.min(valuesAll) || 1, d3.quantileSorted(valuesAll.slice().sort(d3.ascending), 1 / 3) || 1, d3.quantileSorted(valuesAll.slice().sort(d3.ascending), 2 / 3) || 1, d3.max(valuesAll) || 1];
+      }
+      const reps = [breaks[1], breaks[2], breaks[3]]; // 各クラスの上限値を代表に
+
+      // 全体表示のスケール（globalRadiusK）があればそれに従って表示、なければ r を暫定利用
+      const legendRadius = (val) => bubbleRadius(val);
       const sizeLegend = `
         <span class="legend-item">
           <strong>サイズ:</strong>
-          <span class="size-bubble" style="width:${2 * r1}px;height:${2 * r1}px;"></span>
-          <span class="size-label">¥1,000</span>
-          <span class="size-bubble" style="width:${2 * r2}px;height:${2 * r2}px;"></span>
-          <span class="size-label">¥10,000</span>
+          ${reps
+            .map((v) => {
+              const rr = legendRadius(v);
+              return `<span class=\"size-bubble\" style=\"width:${2 * rr}px;height:${2 * rr}px;\"></span><span class=\"size-label\">${fmtYen(v)}</span>`;
+            })
+            .join('')}
         </span>`;
       legendDiv.innerHTML =
         items
@@ -93,8 +151,15 @@
     // 半径スケール（値→ピクセル半径）。平方根スケールで極端な値の影響を緩和
     const vExtent = d3.extent(nodesData, (d) => d.value);
     const r = d3.scaleSqrt().domain(vExtent).range([6, 28]);
-    // 全体表示（pack）時の半径スケール係数（r_pack = packRadiusK * sqrt(value)）
-    let packRadiusK = null;
+    // 全体表示（pack）から導出した半径スケール係数を全モードで共有
+    // r_global = globalRadiusK * sqrt(value)
+    let globalRadiusK = null;
+
+    // 共通の半径関数（全体表示スケールを優先）
+    const bubbleRadius = (val) => {
+      if (globalRadiusK) return Math.max(2, globalRadiusK * Math.sqrt(val));
+      return Math.max(2, r(val));
+    };
 
     // ツールチップ
     const tip = d3
@@ -186,7 +251,7 @@
       .force('x', d3.forceX())
       .force('y', d3.forceY())
       // 非重なりギリギリまで詰める（反復回数を増やす）
-      .force('collide', d3.forceCollide().radius((d) => r(d.value) + COLLIDE_PAD).strength(1).iterations(6))
+      .force('collide', d3.forceCollide().radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6))
       .alpha(1);
 
     // 全体モード用の詰め込み座標
@@ -215,7 +280,7 @@
     // 表示幅からグリッド列数を概算（安全側の見積り）
     function suggestedColsFor(groupsCount, extraGap = 0) {
       const innerW = width - margin.left - margin.right;
-      const rMax = d3.max(nodes, (d) => r(d.value)) || 20;
+      const rMax = d3.max(nodes, (d) => bubbleRadius(d.value)) || 20;
       // 余白を抑えてセル幅を小さく
       const cellW = Math.max(2 * rMax + 8 + extraGap, 72 + extraGap); // 余白込みの最小セル幅
       const cols = Math.floor(innerW / cellW) || 1;
@@ -231,7 +296,7 @@
     function layoutGrid(groups, extraGap = 0, opts = {}) {
       const innerW = width - margin.left - margin.right;
       const innerH = height - margin.top - margin.bottom;
-      const rMax = d3.max(nodes, (d) => r(d.value)) || 20;
+      const rMax = d3.max(nodes, (d) => bubbleRadius(d.value)) || 20;
       // セルの基本サイズもやや小さく
       const baseCellDefault = Math.max(2 * rMax + 6 + extraGap, 68 + extraGap);
       const baseCell = Math.max(baseCellDefault, opts.minCell || 0);
@@ -267,8 +332,7 @@
       currentMode = mode;
       let centers;
       if (mode === 'member') {
-        allLayout = null; // 詰め込み無効
-        packRadiusK = null;
+        allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
         const effM = 0.85; // 充填効率を高めにしてセルをコンパクトに
         // メンバーごとに必要直径を推定
@@ -278,7 +342,7 @@
             const sumR2 = d3.sum(
               nodes.filter((n) => n.memberName === mname),
               (n) => {
-                const rr = r(n.value) + COLLIDE_PAD;
+                const rr = bubbleRadius(n.value) + COLLIDE_PAD;
                 return rr * rr;
               }
             );
@@ -292,9 +356,11 @@
         centers = grid.centers;
         sim.force('x').x((d) => centers.get(d.memberName).cx);
         sim.force('y').y((d) => centers.get(d.memberName).cy);
+        // 衝突半径も統一スケールへ
+        sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
         updateGroupLabels(centers, (k) => k);
         // 半径はスムーズに戻す、物理遷移も滑らかに
-        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => r(d.value));
+        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
         sim.alphaTarget(0.35).alpha(1).restart();
         d3.timeout(() => sim.alphaTarget(0), 800);
         // SVG高さを必要分だけ伸ばす（スクロール対応）
@@ -312,8 +378,7 @@
         );
         groupKeyFn = (d) => d.memberName;
       } else if (mode === 'category') {
-        allLayout = null; // 詰め込み無効
-        packRadiusK = null;
+        allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
         const eff = 0.85; // 充填効率を高めにしてセルをコンパクトに
         const pad = COLLIDE_PAD; // バブル周りの余白（半径に加算）を最小化
@@ -322,7 +387,7 @@
             const sumR2 = d3.sum(
               nodes.filter((n) => n.category === cat),
               (n) => {
-                const rr = r(n.value) + pad;
+                const rr = bubbleRadius(n.value) + pad;
                 return rr * rr;
               }
             );
@@ -336,8 +401,10 @@
         centers = gridC.centers;
         sim.force('x').x((d) => centers.get(d.category).cx);
         sim.force('y').y((d) => centers.get(d.category).cy);
+        // 衝突半径も統一スケールへ
+        sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
         updateGroupLabels(centers, (k) => k);
-        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => r(d.value));
+        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
         sim.alphaTarget(0.35).alpha(1).restart();
         d3.timeout(() => sim.alphaTarget(0), 800);
         // SVG高さは内容に応じて拡張（縦スクロール可能に）
@@ -370,7 +437,7 @@
         const ks = leaves
           .filter((l) => l.data.value > 0)
           .map((l) => l.r / Math.sqrt(l.data.value));
-        packRadiusK = ks.length ? d3.median(ks) : null;
+        globalRadiusK = ks.length ? d3.median(ks) : null;
         allLayout = new Map(leaves.map((l) => [l.data.id, { x: l.x, y: l.y, r: l.r }]));
         // ラベルは無し
         updateGroupLabels(new Map(), () => '');
