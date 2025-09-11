@@ -245,7 +245,7 @@
     let currentMode = initialMode;
 
     // シミュレーション
-    const COLLIDE_PAD = 1.2; // 非重なりを維持しつつ最小限の隙間（視認性向上のため少し広め）
+    const COLLIDE_PAD = 1.6; // 非重なりを維持しつつ最小限の隙間（視認性向上のため広め）
     const sim = d3
       .forceSimulation(nodes)
       .force('x', d3.forceX())
@@ -417,6 +417,48 @@
       return res;
     }
 
+    // クラスタ内の配置から、衝突を解消するように少しだけ押し広げる
+    // items: ノード配列、posMap: Map(id => {x,y})
+    function relaxNoOverlap(items, posMap, bounds, iter = 18) {
+      if (!items.length) return posMap;
+      const ids = items.map((d) => d.id);
+      const radii = new Map(items.map((d) => [d.id, bubbleRadius(d.value)]));
+      for (let t = 0; t < iter; t++) {
+        let moved = false;
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const idA = ids[i];
+            const idB = ids[j];
+            const pa = posMap.get(idA);
+            const pb = posMap.get(idB);
+            if (!pa || !pb) continue;
+            const ra = radii.get(idA) || 0;
+            const rb = radii.get(idB) || 0;
+            let dx = pb.x - pa.x;
+            let dy = pb.y - pa.y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+            const minD = ra + rb + COLLIDE_PAD;
+            if (dist < minD) {
+              const push = (minD - dist) * 0.52; // 少し余裕をもって押し広げる
+              dx /= dist; dy /= dist;
+              pa.x -= dx * push * 0.5; pa.y -= dy * push * 0.5;
+              pb.x += dx * push * 0.5; pb.y += dy * push * 0.5;
+              moved = true;
+            }
+          }
+        }
+        // 枠外に出ないようクランプ
+        for (const id of ids) {
+          const p = posMap.get(id);
+          const r = radii.get(id) || 0;
+          p.x = Math.max(bounds.x0 + r, Math.min(bounds.x1 - r, p.x));
+          p.y = Math.max(bounds.y0 + r, Math.min(bounds.y1 - r, p.y));
+        }
+        if (!moved) break;
+      }
+      return posMap;
+    }
+
     // モード切替（'all'|'member'|'category'）
     function setMode(mode) {
       currentMode = mode;
@@ -457,7 +499,7 @@
             y1: c.cy + grid.cellH / 2,
           };
           const groupNodes = nodes.filter((n) => n.memberName === mname);
-          const pos = packGroupGreedy(groupNodes, c, b);
+          const pos = relaxNoOverlap(groupNodes, packGroupGreedy(groupNodes, c, b), b, 20);
           pos.forEach((p, id) => target.set(id, p));
         }
         nodeSel
@@ -523,7 +565,7 @@
             y1: c.cy + gridC.cellH / 2,
           };
           const groupNodes = nodes.filter((n) => n.category === cat);
-          const pos = packGroupGreedy(groupNodes, c, b);
+          const pos = relaxNoOverlap(groupNodes, packGroupGreedy(groupNodes, c, b), b, 20);
           pos.forEach((p, id) => targetC.set(id, p));
         }
         nodeSel
