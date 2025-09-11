@@ -53,7 +53,6 @@
     const chartG = zoomLayer.append('g').attr('transform', `translate(${margin.left}, ${margin.top})`);
     const nodesG = chartG.append('g').attr('class', 'nodes');
     const groupsG = chartG.append('g').attr('class', 'groups'); // グループタイトル等（ノードの上に表示）
-    const labelsG = chartG.append('g').attr('class', 'node-labels'); // バブルの名前ラベル
     // クラスタ（議員/カテゴリ）ごとのセル境界（x0,y0,x1,y1）に収めるためのバウンディング
     let clusterBounds = null; // Map<clusterKey, {x0,y0,x1,y1}>
     // tick 内でどのキーでクラスタリングしているかを参照する関数
@@ -179,11 +178,11 @@
     const nodes = nodesData.map((d) => Object.assign({}, d));
 
     // ノード描画（サークル）
-  const nodeSel = nodesG
+    const nodeSel = nodesG
       .selectAll('circle')
       .data(nodes, (d) => d.id)
       .join('circle')
-      .attr('r', (d) => bubbleRadius(d.value))
+      .attr('r', (d) => r(d.value))
       .attr('fill', (d) => color(d.category))
       .attr('stroke', '#fff')
       .attr('stroke-width', 1)
@@ -327,32 +326,7 @@
       );
       return { centers, rows, cols, cellW, cellH, innerHeight: rows * cellH };
     }
-
-    // クラスタ内を d3-force で軽く解く（非重なり＋中心へ引き寄せ）
-    function layoutGroupForce(items, center, bounds) {
-      const pts = items.map((d) => ({
-        id: d.id,
-        r: bubbleRadius(d.value),
-        x: Number.isFinite(d.x) ? d.x : center.cx,
-        y: Number.isFinite(d.y) ? d.y : center.cy,
-      }));
-      const simLocal = d3
-        .forceSimulation(pts)
-        .force('x', d3.forceX(center.cx).strength(0.12))
-        .force('y', d3.forceY(center.cy).strength(0.12))
-        .force('collide', d3.forceCollide().radius((p) => p.r + COLLIDE_PAD).strength(1).iterations(2))
-        .stop();
-      const TICKS = 160;
-      for (let i = 0; i < TICKS; i++) {
-        simLocal.tick();
-        for (const p of pts) {
-          p.x = Math.max(bounds.x0 + p.r, Math.min(bounds.x1 - p.r, p.x));
-          p.y = Math.max(bounds.y0 + p.r, Math.min(bounds.y1 - p.r, p.y));
-        }
-      }
-      return new Map(pts.map((p) => [p.id, { x: p.x, y: p.y }]));
-    }
-
+    
     // クラスタ内で重ならないように円を貪欲配置し、目標座標を返す
     function packGroupGreedy(items, center, bounds) {
       const sorted = items
@@ -407,7 +381,7 @@
       if (mode === 'member') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const effM = 0.78; // 充填効率（やや余裕を持たせ重なりを防止）
+        const effM = 0.85; // 充填効率を高めにしてセルをコンパクトに
         // メンバーごとに必要直径を推定
         const members = Array.from(new Set(nodes.map((d) => d.memberName)));
         const needDiamByMember = new Map(
@@ -427,11 +401,9 @@
         // 余白を最小限にして密度を上げる（minCell を適用）
         const grid = layoutGrid(members, 4, { minCell: minCellMember });
         centers = grid.centers;
-        // シミュレーションは止め、静的目標座標へスムーズ遷移（全体モードと同等の体験）
+        // シミュレーションは止め、静的目標座標へスムーズ遷移（全体モードと同じ挙動）
         sim.alpha(0).stop();
         updateGroupLabels(centers, (k) => k);
-        // 既存の名前ラベルを消してから再描画
-        labelsG.selectAll('text.node-name').remove();
         const target = new Map();
         for (const mname of members) {
           const c = centers.get(mname);
@@ -442,18 +414,16 @@
             y1: c.cy + grid.cellH / 2,
           };
           const groupNodes = nodes.filter((n) => n.memberName === mname);
-          const pos = layoutGroupForce(groupNodes, c, b);
+          const pos = packGroupGreedy(groupNodes, c, b);
           pos.forEach((p, id) => target.set(id, p));
         }
-        const TRANS = 1400;
         nodeSel
           .transition()
-          .duration(TRANS)
+          .duration(1400)
           .ease(d3.easeCubicInOut)
           .attr('cx', (d) => target.get(d.id)?.x ?? d.x)
           .attr('cy', (d) => target.get(d.id)?.y ?? d.y)
           .attr('r', (d) => bubbleRadius(d.value));
-        // 内部座標を更新
         nodes.forEach((n) => {
           const p = target.get(n.id);
           if (p) {
@@ -461,49 +431,6 @@
             n.y = p.y;
           }
         });
-        // 各バブルの名前（議員名）を移動完了後にフェードイン
-        const labelData = nodes.map((d) => ({
-          id: d.id,
-          name: d.memberName,
-          x: target.get(d.id)?.x ?? d.x,
-          y: (target.get(d.id)?.y ?? d.y) - (bubbleRadius(d.value) + 6),
-          r: bubbleRadius(d.value),
-        }));
-        const labels = labelsG
-          .selectAll('text.node-name')
-          .data(labelData, (d) => d.id)
-          .join(
-            (enter) =>
-              enter
-                .append('text')
-                .attr('class', 'node-name')
-                .attr('text-anchor', 'middle')
-                .style('font', '11px system-ui, sans-serif')
-                .style('fill', '#333')
-                .style('pointer-events', 'none')
-                .style('paint-order', 'stroke')
-                .attr('stroke', '#fff')
-                .attr('stroke-width', 3)
-                .attr('stroke-linejoin', 'round')
-                .style('opacity', 0)
-                .attr('x', (d) => d.x)
-                .attr('y', (d) => d.y)
-                .text((d) => d.name),
-            (update) =>
-              update
-                .style('opacity', 0)
-                .attr('x', (d) => d.x)
-                .attr('y', (d) => d.y)
-                .text((d) => d.name),
-            (exit) => exit.remove()
-          );
-        const SHOW_THRESHOLD = 10;
-        labels
-          .filter((d) => d.r >= SHOW_THRESHOLD)
-          .transition()
-          .delay(TRANS)
-          .duration(400)
-          .style('opacity', 1);
         // SVG高さを必要分だけ伸ばす（スクロール対応）
         const totalH = margin.top + grid.innerHeight + margin.bottom;
         svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
@@ -521,7 +448,7 @@
       } else if (mode === 'category') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const eff = 0.78; // 充填効率（やや余裕を持たせ重なりを防止）
+        const eff = 0.85; // 充填効率を高めにしてセルをコンパクトに
         const pad = COLLIDE_PAD; // バブル周りの余白（半径に加算）を最小化
         const needDiamByCat = new Map(
           categories.map((cat) => {
@@ -543,8 +470,6 @@
         // シミュレーション停止し、静的目標座標へトランジション
         sim.alpha(0).stop();
         updateGroupLabels(centers, (k) => k);
-        // 名前ラベルはカテゴリモードでは非表示
-        labelsG.selectAll('text.node-name').remove();
         const targetC = new Map();
         for (const cat of categories) {
           const c = centers.get(cat);
@@ -555,7 +480,7 @@
             y1: c.cy + gridC.cellH / 2,
           };
           const groupNodes = nodes.filter((n) => n.category === cat);
-          const pos = layoutGroupForce(groupNodes, c, b);
+          const pos = packGroupGreedy(groupNodes, c, b);
           pos.forEach((p, id) => targetC.set(id, p));
         }
         nodeSel
@@ -614,8 +539,6 @@
           .attr('cx', (d) => allLayout.get(d.id)?.x ?? 0)
           .attr('cy', (d) => allLayout.get(d.id)?.y ?? 0)
           .attr('r', (d) => allLayout.get(d.id)?.r ?? r(d.value));
-        // 名前ラベルは全体モードでは非表示
-        labelsG.selectAll('text.node-name').remove();
         // ノードの内部座標も同期しておく（他モード復帰時のジャンプ防止）
         nodes.forEach((n) => {
           const p = allLayout.get(n.id);
