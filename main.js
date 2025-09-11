@@ -360,9 +360,10 @@
         sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
         updateGroupLabels(centers, (k) => k);
         // 半径はスムーズに戻す、物理遷移も滑らかに
-        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
-        sim.alphaTarget(0.35).alpha(1).restart();
-        d3.timeout(() => sim.alphaTarget(0), 800);
+        nodeSel.transition().duration(1400).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
+        // ゆっくり落ち着くようにアルファ目標も長めに維持
+        sim.alphaTarget(0.28).alpha(1).restart();
+        d3.timeout(() => sim.alphaTarget(0), 1800);
         // SVG高さを必要分だけ伸ばす（スクロール対応）
         const totalH = margin.top + grid.innerHeight + margin.bottom;
         svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
@@ -404,9 +405,9 @@
         // 衝突半径も統一スケールへ
         sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
         updateGroupLabels(centers, (k) => k);
-        nodeSel.transition().duration(500).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
-        sim.alphaTarget(0.35).alpha(1).restart();
-        d3.timeout(() => sim.alphaTarget(0), 800);
+        nodeSel.transition().duration(1400).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
+        sim.alphaTarget(0.28).alpha(1).restart();
+        d3.timeout(() => sim.alphaTarget(0), 1800);
         // SVG高さは内容に応じて拡張（縦スクロール可能に）
         const totalH = margin.top + gridC.innerHeight + margin.bottom;
         svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
@@ -444,7 +445,7 @@
         // 座標・半径をスムーズに遷移（はみ出し防止）
         nodeSel
           .transition()
-          .duration(700)
+          .duration(1400)
           .ease(d3.easeCubicInOut)
           .attr('cx', (d) => allLayout.get(d.id)?.x ?? 0)
           .attr('cy', (d) => allLayout.get(d.id)?.y ?? 0)
