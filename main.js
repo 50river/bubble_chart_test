@@ -182,7 +182,7 @@
       .selectAll('circle')
       .data(nodes, (d) => d.id)
       .join('circle')
-      .attr('r', (d) => r(d.value))
+      .attr('r', (d) => bubbleRadius(d.value))
       .attr('fill', (d) => color(d.category))
       .attr('stroke', '#fff')
       .attr('stroke-width', 1)
@@ -245,7 +245,7 @@
     let currentMode = initialMode;
 
     // シミュレーション
-    const COLLIDE_PAD = 0.25; // 非重なりを維持しつつ最小限の隙間
+    const COLLIDE_PAD = 1.2; // 非重なりを維持しつつ最小限の隙間（視認性向上のため少し広め）
     const sim = d3
       .forceSimulation(nodes)
       .force('x', d3.forceX())
@@ -339,8 +339,8 @@
         const ri = it.r;
         let okPlaced = false;
         let k = 0;
-        const maxIter = 3000;
-        const step = Math.max(2, ri * 0.5);
+        const maxIter = Math.max(3500, 500 + 80 * sorted.length); // 円数に応じて探索回数を増やす
+        const step = Math.max(2, ri * 0.7); // 探索ステップを少し広げる
         while (k < maxIter && !okPlaced) {
           const a = k * golden;
           const rad = 0.6 * step * Math.sqrt(k);
@@ -365,8 +365,51 @@
           k++;
         }
         if (!okPlaced) {
-          const x = Math.max(bounds.x0 + ri, Math.min(bounds.x1 - ri, center.cx));
-          const y = Math.max(bounds.y0 + ri, Math.min(bounds.y1 - ri, center.cy));
+          // ランダムサンプリングで最終探索（矩形内一様）
+          let tries = 0;
+          const maxTries = Math.max(2000, 300 + 50 * sorted.length);
+          while (tries < maxTries && !okPlaced) {
+            let x = bounds.x0 + ri + Math.random() * Math.max(0, bounds.x1 - bounds.x0 - 2 * ri);
+            let y = bounds.y0 + ri + Math.random() * Math.max(0, bounds.y1 - bounds.y0 - 2 * ri);
+            let ok = true;
+            for (const p of placed) {
+              const dx = x - p.x;
+              const dy = y - p.y;
+              if (dx * dx + dy * dy < Math.pow(ri + p.r + COLLIDE_PAD, 2)) {
+                ok = false;
+                break;
+              }
+            }
+            if (ok) {
+              placed.push({ x, y, r: ri });
+              res.set(it.id, { x, y });
+              okPlaced = true;
+              break;
+            }
+            tries++;
+          }
+        }
+        if (!okPlaced) {
+          // まだだめなら、最も近い円から反対方向に押し出して配置
+          let x = center.cx, y = center.cy;
+          if (placed.length) {
+            let nearest = placed[0];
+            let bestD = Infinity;
+            for (const p of placed) {
+              const dx = center.cx - p.x;
+              const dy = center.cy - p.y;
+              const dd = dx * dx + dy * dy;
+              if (dd < bestD) {
+                bestD = dd;
+                nearest = p;
+              }
+            }
+            const ang = Math.atan2(center.cy - nearest.y, center.cx - nearest.x);
+            x = nearest.x + (nearest.r + ri + COLLIDE_PAD) * Math.cos(ang);
+            y = nearest.y + (nearest.r + ri + COLLIDE_PAD) * Math.sin(ang);
+          }
+          x = Math.max(bounds.x0 + ri, Math.min(bounds.x1 - ri, x));
+          y = Math.max(bounds.y0 + ri, Math.min(bounds.y1 - ri, y));
           placed.push({ x, y, r: ri });
           res.set(it.id, { x, y });
         }
@@ -381,7 +424,7 @@
       if (mode === 'member') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const effM = 0.85; // 充填効率を高めにしてセルをコンパクトに
+        const effM = 0.78; // 充填効率の上限をやや保守的に（余白を確保）
         // メンバーごとに必要直径を推定
         const members = Array.from(new Set(nodes.map((d) => d.memberName)));
         const needDiamByMember = new Map(
@@ -448,7 +491,7 @@
       } else if (mode === 'category') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const eff = 0.85; // 充填効率を高めにしてセルをコンパクトに
+        const eff = 0.78; // 充填効率の上限をやや保守的に（余白を確保）
         const pad = COLLIDE_PAD; // バブル周りの余白（半径に加算）を最小化
         const needDiamByCat = new Map(
           categories.map((cat) => {
@@ -521,7 +564,7 @@
           .hierarchy({ children: nodes.map((d) => ({ id: d.id, value: d.value })) })
           .sum((d) => d.value);
         // パックレイアウトの余白を最小限に（非重なりギリギリ）
-        const packed = d3.pack().size([innerW, innerH]).padding(0.25)(h);
+        const packed = d3.pack().size([innerW, innerH]).padding(COLLIDE_PAD)(h);
         const leaves = packed.leaves();
         // pack の半径は sqrt(value) に比例するため、係数を推定して凡例に反映
         const ks = leaves
