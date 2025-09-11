@@ -203,9 +203,7 @@
       .attr('fill', (d) => color(d.category))
       .attr('stroke', '#fff')
       .attr('stroke-width', 1)
-      // 初期位置は中央付近に仮配置（初期描画が見えないのを防止）
-      .attr('cx', width / 2)
-      .attr('cy', height / 2)
+      .attr('filter', 'url(#cute-shadow)')
       .each(function (d, i) {
         // ドリフト用の位相・速度・振幅（半径に応じて少しだけ）
         d._phase = Math.random() * Math.PI * 2;
@@ -576,7 +574,7 @@
           .delay((d, i) => (i % 20) * 8)
           .duration(1100)
           .ease(d3.easeBackOut)
-          .on('start', function () { isTransitioning = true; d3.select(this).attr('transform', 'translate(0,0)'); })
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => target.get(d.id)?.x ?? d.x)
           .attr('cy', (d) => target.get(d.id)?.y ?? d.y)
           .attr('r', (d) => bubbleRadius(d.value));
@@ -647,7 +645,7 @@
           .delay((d, i) => (i % 20) * 8)
           .duration(1100)
           .ease(d3.easeBackOut)
-          .on('start', function () { isTransitioning = true; d3.select(this).attr('transform', 'translate(0,0)'); })
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => targetC.get(d.id)?.x ?? d.x)
           .attr('cy', (d) => targetC.get(d.id)?.y ?? d.y)
           .attr('r', (d) => bubbleRadius(d.value));
@@ -699,7 +697,7 @@
           .delay((d, i) => (i % 20) * 8)
           .duration(1100)
           .ease(d3.easeBackOut)
-          .on('start', function () { isTransitioning = true; d3.select(this).attr('transform', 'translate(0,0)'); })
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => allLayout.get(d.id)?.x ?? 0)
           .attr('cy', (d) => allLayout.get(d.id)?.y ?? 0)
           .attr('r', (d) => allLayout.get(d.id)?.r ?? r(d.value));
@@ -745,17 +743,16 @@
           const baseY = d.y ?? +d3.select(this).attr('cy') || 0;
           const dx = d._amp * Math.sin((time * 0.001) * d._speed + d._phase);
           const dy = d._amp * Math.cos((time * 0.0012) * d._speed + d._phase);
-          // 軽いドリフトは transform で与え、cx/cy はレイアウト値を維持
-          let tx = dx, ty = dy;
+          let x = baseX + dx;
+          let y = baseY + dy;
           if (clusterBounds && groupKeyFn) {
             const b = clusterBounds.get(groupKeyFn(d));
             if (b) {
-              // セル境界を越えそうなら振幅を抑える
-              if (baseX + dx < b.x0 + rr || baseX + dx > b.x1 - rr) tx = 0;
-              if (baseY + dy < b.y0 + rr || baseY + dy > b.y1 - rr) ty = 0;
+              x = Math.max(b.x0 + rr, Math.min(b.x1 - rr, x));
+              y = Math.max(b.y0 + rr, Math.min(b.y1 - rr, y));
             }
           }
-          d3.select(this).attr('transform', `translate(${tx},${ty})`);
+          d3.select(this).attr('cx', x).attr('cy', y);
         });
       }
       requestAnimationFrame(cuteDrift);
