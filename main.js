@@ -53,6 +53,22 @@
     const chartG = zoomLayer.append('g').attr('transform', `translate(${margin.left}, ${margin.top})`);
     const nodesG = chartG.append('g').attr('class', 'nodes');
     const groupsG = chartG.append('g').attr('class', 'groups'); // グループタイトル等（ノードの上に表示）
+    // ふんわり影（可愛さ演出）
+    const defs = svg.append('defs');
+    const shadow = defs
+      .append('filter')
+      .attr('id', 'cute-shadow')
+      .attr('x', '-50%')
+      .attr('y', '-50%')
+      .attr('width', '200%')
+      .attr('height', '200%');
+    shadow
+      .append('feDropShadow')
+      .attr('dx', 0)
+      .attr('dy', 1.2)
+      .attr('stdDeviation', 1.2)
+      .attr('flood-color', '#000')
+      .attr('flood-opacity', 0.15);
     // クラスタ（議員/カテゴリ）ごとのセル境界（x0,y0,x1,y1）に収めるためのバウンディング
     let clusterBounds = null; // Map<clusterKey, {x0,y0,x1,y1}>
     // tick 内でどのキーでクラスタリングしているかを参照する関数
@@ -178,6 +194,7 @@
     const nodes = nodesData.map((d) => Object.assign({}, d));
 
     // ノード描画（サークル）
+    let isTransitioning = false; // トランジション中はドリフト抑制
     const nodeSel = nodesG
       .selectAll('circle')
       .data(nodes, (d) => d.id)
@@ -186,6 +203,13 @@
       .attr('fill', (d) => color(d.category))
       .attr('stroke', '#fff')
       .attr('stroke-width', 1)
+      .attr('filter', 'url(#cute-shadow)')
+      .each(function (d, i) {
+        // ドリフト用の位相・速度・振幅（半径に応じて少しだけ）
+        d._phase = Math.random() * Math.PI * 2;
+        d._speed = 0.6 + Math.random() * 0.6;
+        d._amp = Math.min(2.2, 0.08 * bubbleRadius(d.value) + 0.8);
+      })
       .on('mousemove', (event, d) => {
         tip
           .style('left', event.clientX + 10 + 'px')
@@ -197,7 +221,24 @@
             <div>支出: ¥${d3.format(',')(d.value)}</div>
           `);
       })
-      .on('mouseout', () => tip.style('opacity', 0));
+      .on('mouseout', () => tip.style('opacity', 0))
+      .on('mouseenter', function (event, d) {
+        // ぽよっと拡大
+        d3.select(this)
+          .interrupt()
+          .transition()
+          .duration(250)
+          .ease(d3.easeBackOut)
+          .attr('r', bubbleRadius(d.value) * 1.12);
+      })
+      .on('mouseleave', function (event, d) {
+        d3.select(this)
+          .interrupt()
+          .transition()
+          .duration(220)
+          .ease(d3.easeCubicOut)
+          .attr('r', bubbleRadius(d.value));
+      });
 
     // ズーム機能は無効（パン・拡大縮小なし）
 
@@ -530,11 +571,14 @@
         }
         nodeSel
           .transition()
-          .duration(1400)
-          .ease(d3.easeCubicInOut)
+          .delay((d, i) => (i % 20) * 8)
+          .duration(1100)
+          .ease(d3.easeBackOut)
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => target.get(d.id)?.x ?? d.x)
           .attr('cy', (d) => target.get(d.id)?.y ?? d.y)
           .attr('r', (d) => bubbleRadius(d.value));
+        nodeSel.transition().on('end', () => (isTransitioning = false));
         nodes.forEach((n) => {
           const p = target.get(n.id);
           if (p) {
@@ -598,11 +642,14 @@
         }
         nodeSel
           .transition()
-          .duration(1400)
-          .ease(d3.easeCubicInOut)
+          .delay((d, i) => (i % 20) * 8)
+          .duration(1100)
+          .ease(d3.easeBackOut)
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => targetC.get(d.id)?.x ?? d.x)
           .attr('cy', (d) => targetC.get(d.id)?.y ?? d.y)
           .attr('r', (d) => bubbleRadius(d.value));
+        nodeSel.transition().on('end', () => (isTransitioning = false));
         nodes.forEach((n) => {
           const p = targetC.get(n.id);
           if (p) {
@@ -647,11 +694,14 @@
         // 座標・半径をスムーズに遷移（はみ出し防止）
         nodeSel
           .transition()
-          .duration(1400)
-          .ease(d3.easeCubicInOut)
+          .delay((d, i) => (i % 20) * 8)
+          .duration(1100)
+          .ease(d3.easeBackOut)
+          .on('start', () => (isTransitioning = true))
           .attr('cx', (d) => allLayout.get(d.id)?.x ?? 0)
           .attr('cy', (d) => allLayout.get(d.id)?.y ?? 0)
           .attr('r', (d) => allLayout.get(d.id)?.r ?? r(d.value));
+        nodeSel.transition().on('end', () => (isTransitioning = false));
         // ノードの内部座標も同期しておく（他モード復帰時のジャンプ防止）
         nodes.forEach((n) => {
           const p = allLayout.get(n.id);
@@ -672,7 +722,7 @@
 
     // 初期: 凡例→マージン調整→モード適用
     drawLegend();
-    setMode(initialMode);
+      setMode(initialMode);
 
     // リサイズ時に座標再計算
     const ro = new ResizeObserver(() => {
@@ -682,6 +732,32 @@
       setMode(currentMode);
     });
     ro.observe(rootEl);
+
+    // ふわふわドリフト（可愛さ演出）。トランジション中は停止。
+    function cuteDrift(t) {
+      if (!isTransitioning) {
+        const time = t || performance.now();
+        nodeSel.each(function (d) {
+          const rr = bubbleRadius(d.value);
+          const baseX = d.x ?? +d3.select(this).attr('cx') || 0;
+          const baseY = d.y ?? +d3.select(this).attr('cy') || 0;
+          const dx = d._amp * Math.sin((time * 0.001) * d._speed + d._phase);
+          const dy = d._amp * Math.cos((time * 0.0012) * d._speed + d._phase);
+          let x = baseX + dx;
+          let y = baseY + dy;
+          if (clusterBounds && groupKeyFn) {
+            const b = clusterBounds.get(groupKeyFn(d));
+            if (b) {
+              x = Math.max(b.x0 + rr, Math.min(b.x1 - rr, x));
+              y = Math.max(b.y0 + rr, Math.min(b.y1 - rr, y));
+            }
+          }
+          d3.select(this).attr('cx', x).attr('cy', y);
+        });
+      }
+      requestAnimationFrame(cuteDrift);
+    }
+    requestAnimationFrame(cuteDrift);
 
     // 現在モード参照用を返す
     return {
