@@ -326,6 +326,53 @@
       );
       return { centers, rows, cols, cellW, cellH, innerHeight: rows * cellH };
     }
+    
+    // クラスタ内で重ならないように円を貪欲配置し、目標座標を返す
+    function packGroupGreedy(items, center, bounds) {
+      const sorted = items
+        .map((d) => ({ id: d.id, r: bubbleRadius(d.value) }))
+        .sort((a, b) => b.r - a.r);
+      const placed = [];
+      const res = new Map();
+      const golden = 2.399963229728653; // 黄金角
+      for (const it of sorted) {
+        const ri = it.r;
+        let okPlaced = false;
+        let k = 0;
+        const maxIter = 3000;
+        const step = Math.max(2, ri * 0.5);
+        while (k < maxIter && !okPlaced) {
+          const a = k * golden;
+          const rad = 0.6 * step * Math.sqrt(k);
+          let x = center.cx + rad * Math.cos(a);
+          let y = center.cy + rad * Math.sin(a);
+          x = Math.max(bounds.x0 + ri, Math.min(bounds.x1 - ri, x));
+          y = Math.max(bounds.y0 + ri, Math.min(bounds.y1 - ri, y));
+          let ok = true;
+          for (const p of placed) {
+            const dx = x - p.x;
+            const dy = y - p.y;
+            if (dx * dx + dy * dy < Math.pow(ri + p.r + COLLIDE_PAD, 2)) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) {
+            placed.push({ x, y, r: ri });
+            res.set(it.id, { x, y });
+            okPlaced = true;
+          }
+          k++;
+        }
+        if (!okPlaced) {
+          const x = Math.max(bounds.x0 + ri, Math.min(bounds.x1 - ri, center.cx));
+          const y = Math.max(bounds.y0 + ri, Math.min(bounds.y1 - ri, center.cy));
+          placed.push({ x, y, r: ri });
+          res.set(it.id, { x, y });
+        }
+      }
+      return res;
+    }
 
     // モード切替（'all'|'member'|'category'）
     function setMode(mode) {
@@ -354,16 +401,36 @@
         // 余白を最小限にして密度を上げる（minCell を適用）
         const grid = layoutGrid(members, 4, { minCell: minCellMember });
         centers = grid.centers;
-        sim.force('x').x((d) => centers.get(d.memberName).cx);
-        sim.force('y').y((d) => centers.get(d.memberName).cy);
-        // 衝突半径も統一スケールへ
-        sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
+        // シミュレーションは止め、静的目標座標へスムーズ遷移（全体モードと同じ挙動）
+        sim.alpha(0).stop();
         updateGroupLabels(centers, (k) => k);
-        // 半径はスムーズに戻す、物理遷移も滑らかに
-        nodeSel.transition().duration(1400).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
-        // ゆっくり落ち着くようにアルファ目標も長めに維持
-        sim.alphaTarget(0.28).alpha(1).restart();
-        d3.timeout(() => sim.alphaTarget(0), 1800);
+        const target = new Map();
+        for (const mname of members) {
+          const c = centers.get(mname);
+          const b = {
+            x0: c.cx - grid.cellW / 2,
+            y0: c.cy - grid.cellH / 2,
+            x1: c.cx + grid.cellW / 2,
+            y1: c.cy + grid.cellH / 2,
+          };
+          const groupNodes = nodes.filter((n) => n.memberName === mname);
+          const pos = packGroupGreedy(groupNodes, c, b);
+          pos.forEach((p, id) => target.set(id, p));
+        }
+        nodeSel
+          .transition()
+          .duration(1400)
+          .ease(d3.easeCubicInOut)
+          .attr('cx', (d) => target.get(d.id)?.x ?? d.x)
+          .attr('cy', (d) => target.get(d.id)?.y ?? d.y)
+          .attr('r', (d) => bubbleRadius(d.value));
+        nodes.forEach((n) => {
+          const p = target.get(n.id);
+          if (p) {
+            n.x = p.x;
+            n.y = p.y;
+          }
+        });
         // SVG高さを必要分だけ伸ばす（スクロール対応）
         const totalH = margin.top + grid.innerHeight + margin.bottom;
         svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
@@ -400,14 +467,36 @@
         // 幅に合わせて列数を自動調整（縦方向は必要分だけ伸ばす＝スクロール可能）
         const gridC = layoutGrid(categories, 4, { minCell: minCellCat });
         centers = gridC.centers;
-        sim.force('x').x((d) => centers.get(d.category).cx);
-        sim.force('y').y((d) => centers.get(d.category).cy);
-        // 衝突半径も統一スケールへ
-        sim.force('collide').radius((d) => bubbleRadius(d.value) + COLLIDE_PAD).strength(1).iterations(6);
+        // シミュレーション停止し、静的目標座標へトランジション
+        sim.alpha(0).stop();
         updateGroupLabels(centers, (k) => k);
-        nodeSel.transition().duration(1400).ease(d3.easeCubicInOut).attr('r', (d) => bubbleRadius(d.value));
-        sim.alphaTarget(0.28).alpha(1).restart();
-        d3.timeout(() => sim.alphaTarget(0), 1800);
+        const targetC = new Map();
+        for (const cat of categories) {
+          const c = centers.get(cat);
+          const b = {
+            x0: c.cx - gridC.cellW / 2,
+            y0: c.cy - gridC.cellH / 2,
+            x1: c.cx + gridC.cellW / 2,
+            y1: c.cy + gridC.cellH / 2,
+          };
+          const groupNodes = nodes.filter((n) => n.category === cat);
+          const pos = packGroupGreedy(groupNodes, c, b);
+          pos.forEach((p, id) => targetC.set(id, p));
+        }
+        nodeSel
+          .transition()
+          .duration(1400)
+          .ease(d3.easeCubicInOut)
+          .attr('cx', (d) => targetC.get(d.id)?.x ?? d.x)
+          .attr('cy', (d) => targetC.get(d.id)?.y ?? d.y)
+          .attr('r', (d) => bubbleRadius(d.value));
+        nodes.forEach((n) => {
+          const p = targetC.get(n.id);
+          if (p) {
+            n.x = p.x;
+            n.y = p.y;
+          }
+        });
         // SVG高さは内容に応じて拡張（縦スクロール可能に）
         const totalH = margin.top + gridC.innerHeight + margin.bottom;
         svg.attr('viewBox', [0, 0, width, totalH]).attr('height', totalH);
