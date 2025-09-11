@@ -245,7 +245,10 @@
     let currentMode = initialMode;
 
     // シミュレーション
-    const COLLIDE_PAD = 1.6; // 非重なりを維持しつつ最小限の隙間（視認性向上のため広め）
+    // グローバル（全体/力学）用の最小余白
+    const COLLIDE_PAD = 0.8;
+    // グループ内での最小余白（見た目上の微小クリアランス）
+    const INNER_PAD = 0.35;
     const sim = d3
       .forceSimulation(nodes)
       .force('x', d3.forceX())
@@ -419,7 +422,7 @@
 
     // クラスタ内の配置から、衝突を解消するように少しだけ押し広げる
     // items: ノード配列、posMap: Map(id => {x,y})
-    function relaxNoOverlap(items, posMap, bounds, iter = 18) {
+    function relaxNoOverlap(items, posMap, bounds, iter = 18, pad = COLLIDE_PAD) {
       if (!items.length) return posMap;
       const ids = items.map((d) => d.id);
       const radii = new Map(items.map((d) => [d.id, bubbleRadius(d.value)]));
@@ -437,7 +440,7 @@
             let dx = pb.x - pa.x;
             let dy = pb.y - pa.y;
             let dist = Math.sqrt(dx * dx + dy * dy) || 1e-6;
-            const minD = ra + rb + COLLIDE_PAD;
+            const minD = ra + rb + pad;
             if (dist < minD) {
               const push = (minD - dist) * 0.52; // 少し余裕をもって押し広げる
               dx /= dist; dy /= dist;
@@ -459,6 +462,24 @@
       return posMap;
     }
 
+    // 与えられた半径でグループ内を最密に近く詰める（d3.packSiblings）
+    // 返り値: { pos: Map(id=>{x,y}), bbox: {x0,y0,x1,y1}, size: number }
+    function packGroupTight(items) {
+      if (!items.length) return { pos: new Map(), bbox: { x0: 0, y0: 0, x1: 0, y1: 0 }, size: 0 };
+      const circles = items.map((d) => ({ id: d.id, r: bubbleRadius(d.value) + INNER_PAD }));
+      // d3.packSiblings は circles に x, y を与える
+      d3.packSiblings(circles);
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const c of circles) {
+        x0 = Math.min(x0, c.x - c.r);
+        y0 = Math.min(y0, c.y - c.r);
+        x1 = Math.max(x1, c.x + c.r);
+        y1 = Math.max(y1, c.y + c.r);
+      }
+      const pos = new Map(circles.map((c) => [c.id, { x: c.x, y: c.y, r: c.r }]));
+      return { pos, bbox: { x0, y0, x1, y1 }, size: Math.max(x1 - x0, y1 - y0) };
+    }
+
     // モード切替（'all'|'member'|'category'）
     function setMode(mode) {
       currentMode = mode;
@@ -466,25 +487,19 @@
       if (mode === 'member') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const effM = 0.78; // 充填効率の上限をやや保守的に（余白を確保）
-        // メンバーごとに必要直径を推定
+        // メンバーごとに実際の最密に近いパッキングで必要サイズを算出
         const members = Array.from(new Set(nodes.map((d) => d.memberName)));
-        const needDiamByMember = new Map(
+        const packedByMember = new Map(
           members.map((mname) => {
-            const sumR2 = d3.sum(
-              nodes.filter((n) => n.memberName === mname),
-              (n) => {
-                const rr = bubbleRadius(n.value) + COLLIDE_PAD;
-                return rr * rr;
-              }
-            );
-            const needRadius = Math.sqrt(sumR2 / effM);
-            return [mname, 2 * needRadius];
+            const groupNodes = nodes.filter((n) => n.memberName === mname);
+            const res = packGroupTight(groupNodes);
+            // セル内でのクリアランス確保のため、わずかに外側余白を足す
+            const need = res.size + 2;
+            return [mname, { ...res, need }];
           })
         );
-        const minCellMember = Math.max(...Array.from(needDiamByMember.values()).concat([0]));
-        // 余白を最小限にして密度を上げる（minCell を適用）
-        const grid = layoutGrid(members, 4, { minCell: minCellMember });
+        const minCellMember = Math.max(...Array.from(packedByMember.values()).map((v) => v.need).concat([0]));
+        const grid = layoutGrid(members, 2, { minCell: minCellMember });
         centers = grid.centers;
         // シミュレーションは止め、静的目標座標へスムーズ遷移（全体モードと同じ挙動）
         sim.alpha(0).stop();
@@ -498,9 +513,20 @@
             x1: c.cx + grid.cellW / 2,
             y1: c.cy + grid.cellH / 2,
           };
+          const packRes = packedByMember.get(mname);
+          const pos = new Map();
+          const cx0 = (packRes.bbox.x0 + packRes.bbox.x1) / 2;
+          const cy0 = (packRes.bbox.y0 + packRes.bbox.y1) / 2;
+          packRes.pos.forEach((p, id) => {
+            // d3.packSiblingsの座標をセル中心へ平行移動
+            const x = c.cx + (p.x - cx0);
+            const y = c.cy + (p.y - cy0);
+            pos.set(id, { x, y });
+          });
+          // 仕上げの微調整（内側小パディングで）
           const groupNodes = nodes.filter((n) => n.memberName === mname);
-          const pos = relaxNoOverlap(groupNodes, packGroupGreedy(groupNodes, c, b), b, 20);
-          pos.forEach((p, id) => target.set(id, p));
+          const relaxed = relaxNoOverlap(groupNodes, pos, b, 14, INNER_PAD);
+          relaxed.forEach((p, id) => target.set(id, p));
         }
         nodeSel
           .transition()
@@ -533,24 +559,17 @@
       } else if (mode === 'category') {
         allLayout = null; // 詰め込み無効（座標のみ）
         // セルにバブルが収まるよう必要最低サイズを推定（面積ベース）
-        const eff = 0.78; // 充填効率の上限をやや保守的に（余白を確保）
-        const pad = COLLIDE_PAD; // バブル周りの余白（半径に加算）を最小化
-        const needDiamByCat = new Map(
+        // カテゴリごとも実パッキングで必要サイズを算出
+        const packedByCat = new Map(
           categories.map((cat) => {
-            const sumR2 = d3.sum(
-              nodes.filter((n) => n.category === cat),
-              (n) => {
-                const rr = bubbleRadius(n.value) + pad;
-                return rr * rr;
-              }
-            );
-            const needRadius = Math.sqrt(sumR2 / eff); // おおよその必要半径
-            return [cat, 2 * needRadius]; // 直径
+            const groupNodes = nodes.filter((n) => n.category === cat);
+            const res = packGroupTight(groupNodes);
+            const need = res.size + 2;
+            return [cat, { ...res, need }];
           })
         );
-        const minCellCat = Math.max(...Array.from(needDiamByCat.values()).concat([0]));
-        // 幅に合わせて列数を自動調整（縦方向は必要分だけ伸ばす＝スクロール可能）
-        const gridC = layoutGrid(categories, 4, { minCell: minCellCat });
+        const minCellCat = Math.max(...Array.from(packedByCat.values()).map((v) => v.need).concat([0]));
+        const gridC = layoutGrid(categories, 2, { minCell: minCellCat });
         centers = gridC.centers;
         // シミュレーション停止し、静的目標座標へトランジション
         sim.alpha(0).stop();
@@ -564,9 +583,18 @@
             x1: c.cx + gridC.cellW / 2,
             y1: c.cy + gridC.cellH / 2,
           };
+          const packRes = packedByCat.get(cat);
+          const pos = new Map();
+          const cx0 = (packRes.bbox.x0 + packRes.bbox.x1) / 2;
+          const cy0 = (packRes.bbox.y0 + packRes.bbox.y1) / 2;
+          packRes.pos.forEach((p, id) => {
+            const x = c.cx + (p.x - cx0);
+            const y = c.cy + (p.y - cy0);
+            pos.set(id, { x, y });
+          });
           const groupNodes = nodes.filter((n) => n.category === cat);
-          const pos = relaxNoOverlap(groupNodes, packGroupGreedy(groupNodes, c, b), b, 20);
-          pos.forEach((p, id) => targetC.set(id, p));
+          const relaxed = relaxNoOverlap(groupNodes, pos, b, 14, INNER_PAD);
+          relaxed.forEach((p, id) => targetC.set(id, p));
         }
         nodeSel
           .transition()
